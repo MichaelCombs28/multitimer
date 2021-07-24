@@ -758,9 +758,9 @@ update msg model =
                     , tone = tempTimer.tone
                     , vibrate = tempTimer.vibrate
                     , repetitions = tempTimer.repetitions
-                    , currentRepetition = 0
+                    , currentRepetition = 1
                     , restTime = tempTimer.restTime
-                    , currentRestTime = 0
+                    , currentRestTime = tempTimer.restTime
                     , color = tempTimer.color
                     , swipe = Swipe.init
                     , id = model.nextId
@@ -1248,15 +1248,34 @@ editingModeTopMenu back =
 
 editTopMenu : Model -> List (Html Msg)
 editTopMenu model =
+    let
+        startTime =
+            List.map .value model.startTimeWheels
+                |> List.sum
+
+        done =
+            if model.tempTimer.label == "" || startTime == 0 then
+                Html.div
+                    [ css
+                        [ Css.paddingRight (Css.px 6)
+                        , Css.fontWeight Css.bold
+                        , Css.opacity (Css.num 0.3)
+                        ]
+                    ]
+                    [ Html.text "Done" ]
+
+            else
+                Html.div
+                    [ css [ Css.paddingRight (Css.px 6), Css.fontWeight Css.bold ]
+                    , Events.onClick Done
+                    ]
+                    [ Html.text "Done" ]
+    in
     [ Html.div
         [ Events.onClick (ScreenSelected True model.screen model.lastScreen)
         ]
         [ Html.text "Cancel" ]
-    , Html.div
-        [ css [ Css.paddingRight (Css.px 6), Css.fontWeight Css.bold ]
-        , Events.onClick Done
-        ]
-        [ Html.text "Done" ]
+    , done
     ]
 
 
