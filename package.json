@@ -1,0 +1,37 @@
+{
+  "name": "build",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "webpack",
+    "dev": "webpack serve",
+    "dev-android": "cap run android && exec yarn dev"
+  },
+  "dependencies": {
+    "@capacitor/android": "^3.0.1",
+    "@capacitor/cli": "^3.0.1",
+    "@capacitor/core": "^3.0.1",
+    "@capacitor/haptics": "^1.0.2",
+    "@capacitor/local-notifications": "^1.0.3",
+    "async": "^3.2.0",
+    "onsenui": "^2.11.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.14.6",
+    "@babel/preset-env": "^7.14.7",
+    "@ionic/cli": "^6.16.3",
+    "babel-loader": "^8.2.2",
+    "css-loader": "^5.2.7",
+    "elm": "^0.19.1-5",
+    "elm-format": "^0.8.5",
+    "elm-webpack-loader": "^8.0.0",
+    "html-loader": "^2.1.2",
+    "native-run": "^1.4.0",
+    "style-loader": "^3.1.0",
+    "ttf-loader": "^1.0.2",
+    "webpack": "^5.40.0",
+    "webpack-cli": "^4.7.2",
+    "webpack-dev-server": "^3.11.2"
+  }
+}
