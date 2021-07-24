@@ -12,6 +12,8 @@ The goal was to create a multiplatform app, but make it look like an IOS app. Se
 
 ## Installation
 
+Make sure you install [ADB](https://developer.android.com/studio/command-line/adb) (easiest bundled with [Android Studio](https://developer.android.com/studio/))
+
 ```
 yarn install
 yarn android-dev # or yarn ios-dev
