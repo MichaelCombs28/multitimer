@@ -1520,6 +1520,28 @@ swipeConfig =
     }
 
 
+millisToHuman : Float -> String
+millisToHuman t =
+    let
+        hours =
+            t / (3600 * 1000) |> floor
+
+        minutes =
+            t / (60 * 1000) |> floor
+
+        seconds =
+            t / 1000 |> floor
+    in
+    if hours > 0 then
+        String.fromInt hours ++ "hr"
+
+    else if minutes > 0 then
+        String.fromInt minutes ++ "min"
+
+    else
+        String.fromInt seconds ++ "sec"
+
+
 millisToDigital : Float -> String
 millisToDigital t =
     let
@@ -1580,7 +1602,7 @@ countdownListItem mode timer =
 
         reps =
             if timer.repetitions > 1 then
-                "Repetitions: "
+                "Reps: "
                     ++ String.fromInt timer.currentRepetition
                     ++ "/"
                     ++ String.fromInt timer.repetitions
@@ -1662,7 +1684,7 @@ countdownListItem mode timer =
         , Html.div
             [ css
                 [ Css.position Css.absolute
-                , Css.padding (Css.px 32)
+                , Css.padding2 (Css.px 26) (Css.px 32)
                 , Css.height (Css.pct 100)
                 , Css.width (Css.pct 100)
                 , Css.zIndex (Css.int 3)
@@ -1671,10 +1693,11 @@ countdownListItem mode timer =
                 , Css.flexDirection Css.column
                 ]
             ]
-            [ Html.h2
+            [ Html.h3
                 [ css
                     [ Css.padding Css.zero
                     , Css.margin Css.zero
+                    , Css.marginLeft (Css.px 2)
                     ]
                 ]
                 [ Html.text timer.label ]
@@ -1683,6 +1706,7 @@ countdownListItem mode timer =
                     [ Css.fontSize (Css.px 48)
                     , Css.fontWeight (Css.int 200)
                     , Css.margin Css.zero
+                    , Css.lineHeight (Css.int 1)
                     ]
                 ]
                 [ Html.text time ]
@@ -1691,13 +1715,21 @@ countdownListItem mode timer =
         , Html.div
             [ css
                 [ Css.position Css.absolute
-                , Css.bottom (Css.px 14)
-                , Css.left (Css.px 32)
+                , Css.bottom (Css.px 20)
+                , Css.left (Css.px 38)
                 , Css.zIndex (Css.int 3)
                 , Css.color (Css.hex "fff")
                 ]
             ]
-            [ Html.text reps ]
+            [ Html.text reps
+            , if timer.restTime > 0 then
+                " \u{00A0} Rest: "
+                    ++ millisToHuman timer.restTime
+                    |> Html.text
+
+              else
+                Html.text ""
+            ]
         ]
         |> Html.toUnstyled
         |> Swipe.customSwipable swipeConfig
