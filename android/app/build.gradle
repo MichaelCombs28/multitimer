@@ -1,4 +1,11 @@
 apply plugin: 'com.android.application'
+apply plugin: 'com.greensopinion.gradle-android-eclipse'
+apply plugin: 'eclipse'
+
+configurations {
+    eclipseConfig.extendsFrom implementation
+    eclipseTestConfig.extendsFrom testImplementation
+}
 
 android {
     compileSdkVersion rootProject.ext.compileSdkVersion

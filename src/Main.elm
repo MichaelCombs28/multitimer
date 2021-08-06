@@ -1,11 +1,12 @@
-port module Main exposing (..)
+module Main exposing (..)
 
 import Browser
 import Browser.Events
 import Css
+import Css.Animations as Animations
 import Css.Global as CG
+import Css.Media exposing (screen)
 import Css.Transitions as Transitions
-import Html as Element
 import Html.Events as ElementEvents
 import Html.Styled as Html exposing (Html)
 import Html.Styled.Attributes as Attributes exposing (class, css)
@@ -13,79 +14,71 @@ import Html.Styled.Events as Events
 import Icon
 import Json.Decode as JD
 import Json.Encode as JE
+import Ports
 import Process
 import Swipe
 import Task exposing (Task)
 import Time
+import Timer exposing (Timer)
 
 
-main : Program () Model Msg
+main : Program (Maybe { lastScreen : String }) App Msg
 main =
     Browser.element
-        { init = always init
-        , update = update
-        , view = view
+        { init = init >> Tuple.mapFirst Active
+        , update = updateApp
+        , view = appView >> Html.toUnstyled
         , subscriptions = subscriptions
         }
 
 
 
--- PORTS
+-- App
 
 
-port fromJS : (JE.Value -> msg) -> Sub msg
+type App
+    = Active Model
+    | Inactive Time.Posix Model
 
 
-port fromElm : Event -> Cmd msg
+updateApp : Msg -> App -> ( App, Cmd Msg )
+updateApp msg app =
+    case app of
+        Active model ->
+            case msg of
+                AppStateChangedInactive time ->
+                    ( Inactive time model, Cmd.none )
+
+                _ ->
+                    update msg model
+                        |> Tuple.mapFirst Active
+
+        Inactive lastTime model ->
+            case msg of
+                JSEventReceived (Ports.AppStateChanged _) ->
+                    -- TODO Subtract time from clocks
+                    ( app, Time.now |> Task.perform AppStateChangedActive )
+
+                AppStateChangedActive currentTime ->
+                    let
+                        timers =
+                            List.map (fromActive (toFloat <| Time.posixToMillis currentTime - Time.posixToMillis lastTime))
+                                model.timers
+                    in
+                    ( Active { model | timers = timers }, Cmd.none )
+
+                _ ->
+                    ( app, Cmd.none )
 
 
-type alias Event =
-    JE.Value
+appView : App -> Html Msg
+appView app =
+    case app of
+        Active model ->
+            view model
 
-
-ring : Timer -> Event
-ring timer =
-    JE.object
-        [ ( "type", JE.string "ring" )
-        , ( "id", JE.int timer.id )
-        , ( "label", JE.string timer.label )
-        , ( "tone", JE.string <| toneToResource timer.tone )
-        , ( "vibrate", JE.bool timer.vibrate )
-        ]
-
-
-stopAlarm : Timer -> Event
-stopAlarm timer =
-    JE.object
-        [ ( "type", JE.string "stopAlarm" )
-        , ( "id", JE.int timer.id )
-        ]
-
-
-type JSEvent
-    = NotificationClosed { id : Int }
-
-
-jsEventDecoder : JD.Decoder JSEvent
-jsEventDecoder =
-    JD.field "type" JD.string
-        |> JD.andThen jsEventDecoder_
-
-
-jsEventDecoder_ : String -> JD.Decoder JSEvent
-jsEventDecoder_ type_ =
-    case type_ of
-        "NotificationClosed" ->
-            JD.map NotificationClosed alarmStoppedDecoder
-
-        _ ->
-            JD.fail (type_ ++ " is not handled.")
-
-
-alarmStoppedDecoder : JD.Decoder { id : Int }
-alarmStoppedDecoder =
-    JD.field "id" JD.int
-        |> JD.map (\i -> { id = i })
+        Inactive _ _ ->
+            Html.text ""
 
 
 
@@ -109,14 +102,32 @@ type alias Model =
     }
 
 
-init : ( Model, Cmd Msg )
-init =
-    ( { screen = Splash
+init : Maybe { lastScreen : String } -> ( Model, Cmd Msg )
+init ls =
+    let
+        ( screen, cmds_ ) =
+            case ls of
+                Just { lastScreen } ->
+                    case screenFromString lastScreen of
+                        Just s ->
+                            ( s, Cmd.none )
+
+                        Nothing ->
+                            ( Splash, Process.sleep 100 |> Task.perform (always Load) )
+
+                Nothing ->
+                    ( Splash, Process.sleep 100 |> Task.perform (always Load) )
+
+        cmds =
+            Cmd.batch
+                [ Ports.fromElm Ports.keepAwake, cmds_ ]
+    in
+    ( { screen = screen
       , loaded = False
       , lastScreen = Thumbnail Normal
       , timers = []
       , nextId = 0
-      , tempTimer = initTimer
+      , tempTimer = Timer.init
       , startTimeWheels = initWheel
       , restTimeWheels = List.repeat 3 initPickerState
       , repetitionModalOpen = False
@@ -129,8 +140,7 @@ init =
             }
       , restTimeModalOpen = False
       }
-    , Process.sleep 100
-        |> Task.perform (\_ -> Load)
+    , cmds
     )
 
 
@@ -144,8 +154,51 @@ type Screen
     | Credits
     | Thumbnail Mode
     | Countdown Mode
-    | TimerAdd TimerType
-    | TimerEdit Int TimerType
+    | TimerAdd Timer.TimerType
+    | TimerEdit Int Timer.TimerType
+
+
+screenToString : Screen -> String
+screenToString screen =
+    case screen of
+        Splash ->
+            "Splash"
+
+        Credits ->
+            "Credits"
+
+        Thumbnail _ ->
+            "Thumbnail"
+
+        Countdown _ ->
+            "Countdown"
+
+        TimerAdd _ ->
+            "TimerAdd"
+
+        TimerEdit _ _ ->
+            "TimerEdit"
+
+
+screenFromString : String -> Maybe Screen
+screenFromString screen =
+    case screen of
+        "Splash" ->
+            Just Splash
+
+        "Credits" ->
+            Just Credits
+
+        "Thumbnail" ->
+            Thumbnail Normal
+                |> Just
+
+        "Countdown" ->
+            Countdown Normal
+                |> Just
+
+        _ ->
+            Nothing
 
 
 type Mode
@@ -153,277 +206,48 @@ type Mode
     | Editing
 
 
-type TimerType
-    = Simple
-    | Interval
 
-
-timerTypeToString : TimerType -> String
-timerTypeToString type_ =
-    case type_ of
-        Simple ->
-            "Simple"
-
-        Interval ->
-            "Interval"
-
-
-type AlarmTone
-    = None
-    | NormalAlarm
-    | Beep
-    | TempleBell
-    | Pager
-    | Sigh
-    | Heels
-    | MissleAlarm
-
-
-alarmTones : List AlarmTone
-alarmTones =
-    [ None, NormalAlarm, Beep, TempleBell, Pager, Sigh, Heels, MissleAlarm ]
-
-
-toneToString : AlarmTone -> String
-toneToString tone =
-    case tone of
-        None ->
-            "None"
-
-        NormalAlarm ->
-            "Normal"
-
-        Beep ->
-            "Beep"
-
-        TempleBell ->
-            "Temple Bell"
-
-        Pager ->
-            "Pager"
-
-        Sigh ->
-            "Sigh"
-
-        Heels ->
-            "Heels"
-
-        MissleAlarm ->
-            "Missle Alarm"
-
-
-toneToResource : AlarmTone -> String
-toneToResource tone =
-    case tone of
-        None ->
-            "none"
-
-        NormalAlarm ->
-            "normal.mp3"
-
-        Beep ->
-            "beep.mp3"
-
-        TempleBell ->
-            "temple_bell.mp3"
-
-        Pager ->
-            "pager.mp3"
-
-        Sigh ->
-            "sigh.mp3"
-
-        Heels ->
-            "heel_walk.mp3"
-
-        MissleAlarm ->
-            "missle_alarm.mp3"
-
-
-type TimerState
-    = Counting
-    | Paused
-    | Ringing
-    | RestCounting
-    | RestPaused
-    | Reset
-    | Finished
-    | Deleted
-
-
-timerStateToString : TimerState -> String
-timerStateToString state =
-    case state of
-        Counting ->
-            "Counting"
-
-        Paused ->
-            "Paused"
-
-        Ringing ->
-            "Ringing"
-
-        RestCounting ->
-            "RestCounting"
-
-        RestPaused ->
-            "RestPaused"
-
-        Reset ->
-            "Reset"
-
-        Finished ->
-            "Finished"
-
-        Deleted ->
-            "Deleted"
-
-
-type alias Timer =
-    { state : TimerState
-    , label : String
-    , startTime : Float
-    , currentTime : Float
-    , tone : AlarmTone
-    , vibrate : Bool
-    , repetitions : Int
-    , currentRepetition : Int
-    , restTime : Float
-    , currentRestTime : Float
-    , color : Color
-    , swipe : Swipe.State
-    , id : Int
-    }
-
-
-encodeTimer : Timer -> JE.Value
-encodeTimer timer =
-    JE.object
-        [ ( "state", JE.string (timerStateToString timer.state) )
-        , ( "label", JE.string timer.label )
-        , ( "startTime", JE.float timer.startTime )
-        , ( "tone", JE.string (toneToString timer.tone) )
-        , ( "vibrate", JE.bool timer.vibrate )
-        , ( "repetitions", JE.int timer.repetitions )
-        , ( "restTime", JE.float timer.restTime )
-        , ( "color", encodeColor timer.color )
-        , ( "id", JE.int timer.id )
-        ]
-
-
-encodeColor : Color -> JE.Value
-encodeColor c =
-    JE.object
-        [ ( "lighter", JE.string c.lighter )
-        , ( "darker", JE.string c.darker )
-        ]
-
-
-initTimer : Timer
-initTimer =
-    { state = Paused
-    , label = ""
-    , startTime = 0
-    , currentTime = 0
-    , tone = NormalAlarm
-    , vibrate = True
-    , repetitions = 1
-    , currentRepetition = 1
-    , restTime = 0
-    , currentRestTime = 0
-    , color = salmon
-    , swipe = Swipe.init
-    , id = -1
-    }
-
-
-type alias Color =
-    { lighter : String
-    , darker : String
-    }
-
-
-colors : List Color
-colors =
-    [ salmon
-    , purple
-    , lightBlue
-    , gold
-    , orange
-    ]
-
-
-salmon : Color
-salmon =
-    { lighter = "#D3969A"
-    , darker = "#D97179"
-    }
-
-
-purple : Color
-purple =
-    { lighter = "#756384"
-    , darker = "#5E4873"
-    }
-
-
-lightBlue : Color
-lightBlue =
-    { lighter = "#8CABBF"
-    , darker = "#6D90A6"
-    }
-
-
-gold : Color
-gold =
-    { lighter = "#F2B771"
-    , darker = "#F2B872"
-    }
-
-
-orange : Color
-orange =
-    { lighter = "#E68866"
-    , darker = "#D9663D"
-    }
-
-
-
-{-
-   Optimization
-   anything more than 1 minute shouldn't require animation frames
--}
 -- SUBSCRIPTIONS
 -- TODO, try CSS without on animation frame, likely better on the browser and easier to implement tbh
 
 
-subscriptions : Model -> Sub Msg
-subscriptions model =
-    let
-        timer =
-            if List.any (.state >> (\a -> a == Counting || a == RestCounting)) model.timers then
-                Browser.Events.onAnimationFrameDelta Tick
+anyCounting : List Timer -> Bool
+anyCounting timers =
+    List.any (.state >> (\a -> a == Timer.Counting || a == Timer.RestCounting)) timers
 
-            else
-                Sub.none
 
-        animationFrame =
-            if List.any .decelerating model.startTimeWheels then
-                Browser.Events.onAnimationFrameDelta MomentumStep
+subscriptions : App -> Sub Msg
+subscriptions app =
+    case app of
+        Active model ->
+            let
+                timer =
+                    if anyCounting model.timers then
+                        Browser.Events.onAnimationFrameDelta Tick
 
-            else
-                Sub.none
-    in
-    Sub.batch
-        [ timer
-        , animationFrame
-        , fromJS jsEventPortTransformer
-        ]
+                    else
+                        Sub.none
+
+                animationFrame =
+                    if List.any .decelerating model.startTimeWheels then
+                        Browser.Events.onAnimationFrameDelta MomentumStep
+
+                    else
+                        Sub.none
+            in
+            Sub.batch
+                [ timer
+                , animationFrame
+                , Ports.fromJS jsEventPortTransformer
+                ]
+
+        Inactive _ _ ->
+            Ports.fromJS jsEventPortTransformer
 
 
 jsEventPortTransformer : JE.Value -> Msg
 jsEventPortTransformer value =
-    case JD.decodeValue jsEventDecoder value of
+    case JD.decodeValue Ports.jsEventDecoder value of
         Ok evt ->
             JSEventReceived evt
 
@@ -448,29 +272,31 @@ type Msg
     | ResetAll
     | PauseAll
     | PlayAll
-    | ToggleState Int TimerState
+    | ToggleState Int Timer.State
     | MomentumStart Int Float
     | DragStep Int Float
     | MomentumStop Int
     | WheelUpdated Int WheelSelector
     | MomentumStep Float
     | RestWheelUpdated Int PickerState
-    | ColorSelected Color
+    | ColorSelected Timer.Color
     | InputName String
     | InputVibrate Bool
-    | ToneSelected AlarmTone
+    | ToneSelected Timer.AlarmTone
     | Done
     | RepetitionModalOpened Bool
     | ToneModalOpened Bool
     | RestTimeModalOpened Bool
     | RepetitionPositionUpdated PickerState
     | TonePositionUpdated PickerState
-    | JSEventReceived JSEvent
+    | JSEventReceived Ports.JSEvent
+    | AppStateChangedInactive Time.Posix
+    | AppStateChangedActive Time.Posix
 
 
 splashTimer : Float
 splashTimer =
-    3000
+    4000
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -491,14 +317,18 @@ update msg model =
             )
 
         Start ->
-            ( { model | screen = Countdown Normal }, Cmd.none )
+            ( { model | screen = Countdown Normal }
+            , Ports.storage "flags"
+                (JE.object [ ( "lastScreen", JE.string "Countdown" ) ])
+                |> Ports.fromElm
+            )
 
         ScreenSelected canDelete lastScreen screen ->
             let
                 timers =
                     if canDelete then
                         List.filter
-                            (\t -> t.state /= Deleted)
+                            (\t -> t.state /= Timer.Deleted)
                             model.timers
 
                     else
@@ -551,7 +381,11 @@ update msg model =
                     List.map (tick delta) model.timers
                         |> List.unzip
             in
-            ( { model | timers = timers }, Cmd.batch cmds )
+            ( { model
+                | timers = timers
+              }
+            , Cmd.batch cmds
+            )
 
         PauseAll ->
             let
@@ -561,11 +395,11 @@ update msg model =
                             { t
                                 | state =
                                     case t.state of
-                                        Counting ->
-                                            Paused
+                                        Timer.Counting ->
+                                            Timer.Paused
 
-                                        RestCounting ->
-                                            RestPaused
+                                        Timer.RestCounting ->
+                                            Timer.RestPaused
 
                                         other ->
                                             other
@@ -573,54 +407,70 @@ update msg model =
                         )
                         model.timers
             in
-            ( { model | timers = timers }, Cmd.none )
+            ( { model
+                | timers = timers
+              }
+            , Cmd.none
+            )
 
         AlarmStopped id ->
             alarmStopped model id
 
         AlarmReset id ->
             let
-                timers =
+                ( timers, cmds ) =
                     List.map
                         (\t ->
                             if t.id == id then
                                 resetAlarm t
 
                             else
-                                t
+                                ( t, Cmd.none )
                         )
                         model.timers
+                        |> List.unzip
             in
-            ( { model | timers = timers }, Cmd.none )
+            ( { model | timers = timers }, Cmd.batch cmds )
 
         ResetAll ->
             let
-                timers =
+                ( timers, cmds ) =
                     List.map resetAlarm model.timers
+                        |> List.unzip
             in
-            ( { model | timers = timers }, Cmd.none )
+            ( { model | timers = timers }
+            , Cmd.batch cmds
+            )
 
         PlayAll ->
             let
-                timers =
+                ( timers, cmds ) =
                     List.map
                         (\t ->
-                            { t
-                                | state =
-                                    case t.state of
-                                        Paused ->
-                                            Counting
+                            case t.state of
+                                Timer.Paused ->
+                                    let
+                                        timer =
+                                            { t | state = Timer.Counting }
+                                    in
+                                    ( timer
+                                    , Ports.alarmStarted timer |> Ports.fromElm
+                                    )
 
-                                        RestPaused ->
-                                            RestCounting
+                                Timer.RestPaused ->
+                                    let
+                                        timer =
+                                            { t | state = Timer.RestCounting }
+                                    in
+                                    ( timer, Ports.alarmStarted timer |> Ports.fromElm )
 
-                                        other ->
-                                            other
-                            }
+                                other ->
+                                    ( t, Cmd.none )
                         )
                         model.timers
+                        |> List.unzip
             in
-            ( { model | timers = timers }, Cmd.none )
+            ( { model | timers = timers }, Cmd.batch cmds )
 
         SwipeMsg id swipe ->
             let
@@ -642,18 +492,62 @@ update msg model =
 
         ToggleState id state ->
             let
-                timers =
+                ( timers, cmds ) =
                     List.map
                         (\t ->
                             if t.id == id then
-                                { t | state = state }
+                                case state of
+                                    Timer.Counting ->
+                                        let
+                                            timer =
+                                                { t | state = state }
+                                        in
+                                        ( timer
+                                        , if t.state == Timer.RestCounting || t.state == Timer.Counting then
+                                            Cmd.none
+
+                                          else
+                                            Ports.alarmStarted timer |> Ports.fromElm
+                                        )
+
+                                    Timer.RestCounting ->
+                                        let
+                                            timer =
+                                                { t | state = state }
+                                        in
+                                        ( timer
+                                        , if t.state == Timer.Counting then
+                                            Cmd.none
+
+                                          else
+                                            Ports.alarmStarted timer |> Ports.fromElm
+                                        )
+
+                                    Timer.Paused ->
+                                        ( { t | state = state }
+                                        , Ports.alarmStopped t |> Ports.fromElm
+                                        )
+
+                                    Timer.RestPaused ->
+                                        ( { t | state = state }
+                                        , Ports.alarmStopped t |> Ports.fromElm
+                                        )
+
+                                    Timer.Deleted ->
+                                        ( { t | state = state }
+                                        , Ports.alarmStopped t |> Ports.fromElm
+                                        )
+
+                                    _ ->
+                                        ( t, Cmd.none )
 
                             else
-                                t
+                                ( t, Cmd.none )
                         )
                         model.timers
+                        |> List.unzip
             in
-            ( { model | timers = timers }, Cmd.none )
+            ( { model | timers = timers }, Cmd.batch cmds )
 
         MomentumStart inx y ->
             case
@@ -751,7 +645,7 @@ update msg model =
                             0
 
                 timer =
-                    { state = Paused
+                    { state = Timer.Paused
                     , label = tempTimer.label
                     , startTime = startTime
                     , currentTime = startTime
@@ -797,7 +691,12 @@ update msg model =
                             , screen = model.lastScreen
                             , startTimeWheels = initWheel
                             , restTimeWheels = List.repeat 3 initPickerState
-                            , tempTimer = initTimer
+                            , tempTimer = Timer.init
+                            , tonePickerPosition =
+                                { initPickerState
+                                    | index = 1
+                                    , currentPosition = -32
+                                }
                           }
                         , Cmd.none
                         )
@@ -805,11 +704,17 @@ update msg model =
                     _ ->
                         ( { model
                             | screen = model.lastScreen
-                            , timers = timer :: model.timers
+                            , timers = timer :: model.timers --List.repeat 100 timer
                             , nextId = model.nextId + 1
                             , startTimeWheels = initWheel
                             , restTimeWheels = List.repeat 3 initPickerState
-                            , tempTimer = initTimer
+                            , tempTimer = Timer.init
+                            , tonePickerPosition =
+                                { initPickerState
+                                    | index = 1
+                                    , currentPosition = -32
+                                }
+                            , repetitionPickerPosition = initPickerState
                           }
                         , Cmd.none
                         )
@@ -873,16 +778,50 @@ update msg model =
         TonePositionUpdated picker_ ->
             { tempTimer
                 | tone =
-                    List.drop picker_.index alarmTones
+                    List.drop picker_.index Timer.alarmTones
                         |> List.head
-                        |> Maybe.withDefault Beep
+                        |> Maybe.withDefault Timer.Beep
             }
                 |> withTimer { model | tonePickerPosition = picker_ }
 
         JSEventReceived jsEvent ->
             case jsEvent of
-                NotificationClosed { id } ->
+                Ports.NotificationClosed { id } ->
                     alarmStopped model id
+
+                Ports.AppStateChanged { isActive } ->
+                    appStateChanged model isActive
+
+                Ports.BackgroundTimerUpdates bgUpdates ->
+                    let
+                        timers_ =
+                            List.foldl
+                                (\bgUpdate acc ->
+                                    List.map
+                                        (\t ->
+                                            if t.id == bgUpdate.id then
+                                                { t
+                                                    | state = bgUpdate.state
+                                                    , currentTime = bgUpdate.currentTime
+                                                    , currentRestTime = bgUpdate.currentRestTime
+                                                    , currentRepetition = bgUpdate.currentRepetition
+                                                }
+
+                                            else
+                                                t
+                                        )
+                                        acc
+                                )
+                                model.timers
+                                bgUpdates.timers
+                    in
+                    ( { model | timers = timers_ }, Cmd.none )
+
+        AppStateChangedInactive _ ->
+            ( model, Cmd.none )
+
+        AppStateChangedActive _ ->
+            ( model, Cmd.none )
 
 
 alarmStopped : Model -> Int -> ( Model, Cmd Msg )
@@ -891,24 +830,27 @@ alarmStopped model id =
         ( timers, cmds ) =
             List.map
                 (\t ->
-                    if t.id == id && t.state == Ringing then
+                    if t.id == id && t.state == Timer.Ringing then
                         if t.repetitions > 0 && t.currentRepetition < t.repetitions then
-                            ( { t
-                                | state =
+                            let
+                                ( currentRepetition, state ) =
                                     if t.restTime > 0 then
-                                        RestCounting
+                                        ( t.currentRepetition, Timer.RestCounting )
 
                                     else
-                                        Counting
-                                , currentRepetition = t.currentRepetition + 1
+                                        ( t.currentRepetition + 1, Timer.Counting )
+                            in
+                            ( { t
+                                | state = state
+                                , currentRepetition = currentRepetition
                                 , currentTime = t.startTime
                                 , currentRestTime = t.restTime
                               }
-                            , fromElm (stopAlarm t)
+                            , Ports.fromElm (Ports.stopRing t)
                             )
 
                         else
-                            ( { t | state = Reset }, fromElm (stopAlarm t) )
+                            ( { t | state = Timer.Reset }, Ports.fromElm (Ports.stopRing t) )
 
                     else
                         ( t, Cmd.none )
@@ -919,6 +861,20 @@ alarmStopped model id =
     ( { model | timers = timers }, Cmd.batch cmds )
 
 
+
+-- Unsure if this is the way to go, might be better to create
+-- alarms and cancel them on pause / play
+
+
+appStateChanged : Model -> Bool -> ( Model, Cmd Msg )
+appStateChanged model isActive =
+    if isActive then
+        ( model, Ports.fromElm Ports.nowActive )
+
+    else
+        ( model, Time.now |> Task.perform AppStateChangedInactive )
+
+
 deleteTimer : Model -> Int -> ( Model, Cmd Msg )
 deleteTimer model id =
     let
@@ -926,13 +882,22 @@ deleteTimer model id =
             List.map
                 (\t ->
                     if t.id == id then
-                        ( { t | state = Deleted }
-                        , if t.state == Ringing then
-                            stopAlarm t
-                                |> fromElm
+                        ( { t | state = Timer.Deleted }
+                        , case t.state of
+                            Timer.Ringing ->
+                                Ports.stopRing t
+                                    |> Ports.fromElm
 
-                          else
-                            Cmd.none
+                            Timer.Counting ->
+                                Ports.alarmStopped t
+                                    |> Ports.fromElm
+
+                            Timer.RestCounting ->
+                                Ports.alarmStopped t
+                                    |> Ports.fromElm
+
+                            _ ->
+                                Cmd.none
                         )
 
                     else
@@ -949,16 +914,31 @@ deleteTimer model id =
                 s ->
                     s
     in
-    if List.all (.state >> (==) Deleted) timers then
+    if List.all (.state >> (==) Timer.Deleted) timers then
         ( { model | timers = [], screen = screen }, Cmd.batch cmds )
 
     else
         ( { model | timers = timers, screen = screen }, Cmd.batch cmds )
 
 
-resetAlarm : Timer -> Timer
+resetAlarm : Timer -> ( Timer, Cmd Msg )
 resetAlarm t =
-    { initTimer
+    let
+        init_ =
+            Timer.init
+
+        cmd =
+            case t.state of
+                Timer.Counting ->
+                    Ports.alarmStopped t |> Ports.fromElm
+
+                Timer.RestCounting ->
+                    Ports.alarmStopped t |> Ports.fromElm
+
+                _ ->
+                    Cmd.none
+    in
+    ( { init_
         | label = t.label
         , startTime = t.startTime
         , currentTime = t.startTime
@@ -969,7 +949,9 @@ resetAlarm t =
         , repetitions = t.repetitions
         , color = t.color
         , id = t.id
-    }
+      }
+    , cmd
+    )
 
 
 withTimer : Model -> Timer -> ( Model, Cmd Msg )
@@ -980,39 +962,61 @@ withTimer model t =
 tick : Float -> Timer -> ( Timer, Cmd Msg )
 tick delta timer =
     case timer.state of
-        Counting ->
+        Timer.Counting ->
             let
                 time =
                     timer.currentTime - delta
+
+                state =
+                    if timer.restTime > 0 then
+                        Timer.RestCounting
+
+                    else
+                        Timer.Counting
             in
             if time <= 0 then
                 if timer.repetitions > 1 && timer.currentRepetition < timer.repetitions then
                     ( { timer
                         | currentTime = 0
-                        , state = Ringing
+                        , state = state
                       }
                     , Cmd.batch
-                        [ fromElm (ring timer)
-                        , Process.sleep 2000
-                            |> Task.perform (\_ -> AlarmStopped timer.id)
+                        [ if timer.vibrate then
+                            Ports.hapticVibrate 500
+                                |> Ports.fromElm
+
+                          else
+                            Cmd.none
                         ]
                     )
 
                 else
-                    ( { timer | currentTime = 0, state = Ringing }
-                    , fromElm (ring timer)
+                    ( { timer | currentTime = 0, state = Timer.Ringing }
+                    , Ports.fromElm (Ports.ring timer)
                     )
 
             else
                 ( { timer | currentTime = time }, Cmd.none )
 
-        RestCounting ->
+        Timer.RestCounting ->
             let
                 time =
                     timer.currentRestTime - delta
             in
             if time <= 0 then
-                ( { timer | state = Counting, currentRestTime = timer.restTime }, Cmd.none )
+                ( { timer
+                    | state = Timer.Counting
+                    , currentTime = timer.startTime
+                    , currentRestTime = timer.restTime
+                    , currentRepetition = timer.currentRepetition + 1
+                  }
+                , if timer.vibrate then
+                    Ports.hapticVibrate 250
+                        |> Ports.fromElm
+
+                  else
+                    Cmd.none
+                )
 
             else
                 ( { timer | currentRestTime = time }, Cmd.none )
@@ -1043,7 +1047,36 @@ styles =
         ]
 
 
-view : Model -> Element.Html Msg
+sequenceDurations : List Float
+sequenceDurations =
+    [ 5, 2, 9, 9, 4, 8, 3, 6, 2, 3, 4, 9, 5, 2, 3, 2, 4, 3 ]
+
+
+colors : List ( Int, Timer.Color )
+colors =
+    [ Timer.salmon
+    , Timer.orange
+    , Timer.gold
+    , Timer.gold
+    , Timer.lightBlue
+    , Timer.orange
+    , Timer.purple
+    , Timer.orange
+    , Timer.purple
+    , Timer.gold
+    , Timer.lightBlue
+    , Timer.salmon
+    , Timer.salmon
+    , Timer.purple
+    , Timer.gold
+    , Timer.gold
+    , Timer.orange
+    , Timer.salmon
+    ]
+        |> List.indexedMap Tuple.pair
+
+
+view : Model -> Html Msg
 view model =
     Html.div
         []
@@ -1080,13 +1113,12 @@ view model =
                 timerEdit id type_ model
 
             Splash ->
-                splashScreen model
+                splashScreen model.loaded
 
             Credits ->
                 creditScreen
         , bottomMenu model
         ]
-        |> Html.toUnstyled
 
 
 creditScreen : Html msg
@@ -1102,74 +1134,159 @@ creditScreen =
         ]
 
 
-splashScreen : Model -> Html Msg
-splashScreen model =
+splashScreen : Bool -> Html Msg
+splashScreen loaded =
     let
-        ( background, opacity ) =
-            if model.loaded then
-                ( lightBlue.darker, 1 )
+        opacity =
+            if loaded then
+                1
 
             else
-                ( "fff", 0 )
+                0
+
+        title =
+            Html.h1
+                [ css
+                    [ Css.position Css.absolute
+                    , Css.zIndex (Css.int 3)
+                    , Css.color (Css.hex "fff")
+                    , Css.textAlign Css.center
+                    , Css.top (Css.vw 100)
+                    , Css.fontWeight (Css.int 400)
+                    , Css.width (Css.pct 100)
+                    ]
+                ]
+                [ Html.text "Multitimer" ]
+
+        cube duration ( inx, { lighter, darker } ) =
+            if inx == 7 then
+                Html.img
+                    [ css
+                        [ Css.width (Css.pct 33.333)
+                        , Css.height (Css.vw 33.333)
+                        , Css.backgroundColor (Css.hex "fff")
+                        , Css.transform (Css.scale 1.0)
+                        ]
+                    , Attributes.src "splashCenter.png"
+                    ]
+                    []
+
+            else
+                Html.div
+                    [ css
+                        [ Css.width (Css.pct 33.333)
+                        , Css.height (Css.vw 33.333)
+                        , Css.backgroundColor (Css.hex darker)
+                        , Css.animationDuration (Css.ms <| duration * 150)
+                        , Css.property "animation-iteration-count" "infinite"
+                        , Animations.keyframes
+                            [ ( 0, [ Animations.backgroundColor (Css.hex darker) ] )
+                            , ( 50, [ Animations.backgroundColor (Css.hex lighter) ] )
+                            ]
+                            |> Css.animationName
+                        ]
+                    ]
+                    []
     in
-    Html.div
-        [ css
-            [ Css.height (Css.vh 100)
-            , Css.width (Css.vw 100)
-            , Css.position Css.absolute
-            , Css.top (Css.px 0)
-            , Css.backgroundColor (Css.hex background)
-            , Css.zIndex (Css.int 1000)
-            , Css.displayFlex
-            , Css.flexDirection Css.column
-            , Css.justifyContent Css.center
-            , Css.alignItems Css.center
-            , Transitions.transition
-                [ Transitions.backgroundColor (splashTimer - 1000)
-                ]
-            ]
-        ]
-        [ Html.h1
-            [ css
-                [ Transitions.transition
-                    [ Transitions.opacity (splashTimer - 1000) ]
-                , Css.opacity (Css.num opacity)
-                , Css.color (Css.hex "fff")
-                , Css.marginBottom (Css.px 10)
-                ]
-            ]
-            [ Html.text "Multitimer" ]
-        , Html.div
-            []
-            [ Html.span
-                [ css
-                    [ Css.color (Css.hex salmon.lighter)
-                    , Css.padding2 (Css.px 0) (Css.px 5)
-                    , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
-                    , Css.opacity (Css.num opacity)
+    List.map2 cube
+        sequenceDurations
+        colors
+        |> (\stuff ->
+                Html.div
+                    [ css
+                        [ Css.height (Css.vh 100)
+                        , Css.width (Css.vw 100)
+                        , Css.position Css.absolute
+                        , Css.top (Css.px 0)
+                        , Css.backgroundColor (Css.hex "#fff")
+                        , Css.zIndex (Css.int 1000)
+                        , Css.overflow Css.hidden
+                        , Css.displayFlex
+                        , Css.justifyContent Css.flexStart
+                        , Css.property "align-content" "flex-start"
+                        , Css.flexWrap Css.wrap
+                        , Css.opacity (Css.num opacity)
+                        , Transitions.transition
+                            [ Transitions.opacity (splashTimer - 1000) ]
+
+                        --, Css.flexDirection Css.column
+                        --, Css.justifyContent Css.center
+                        --, Css.alignItems Css.center
+                        ]
                     ]
-                ]
-                [ Icon.alarmClock_ "none" 64 64 ]
-            , Html.span
-                [ css
-                    [ Css.color (Css.hex gold.lighter)
-                    , Css.padding2 (Css.px 0) (Css.px 5)
-                    , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
-                    , Css.opacity (Css.num opacity)
-                    ]
-                ]
-                [ Icon.alarmClock_ "none" 64 64 ]
-            , Html.span
-                [ css
-                    [ Css.color (Css.hex purple.lighter)
-                    , Css.padding2 (Css.px 0) (Css.px 5)
-                    , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
-                    , Css.opacity (Css.num opacity)
-                    ]
-                ]
-                [ Icon.alarmClock_ "none" 64 64 ]
-            ]
-        ]
+                    (title :: stuff)
+           )
+
+
+
+{-
+   let
+       ( background, opacity ) =
+           if model.loaded then
+               ( Timer.lightBlue.darker, 1 )
+
+           else
+               ( "fff", 0 )
+   in
+   Html.div
+       [ css
+           [ Css.height (Css.vh 100)
+           , Css.width (Css.vw 100)
+           , Css.position Css.absolute
+           , Css.top (Css.px 0)
+           , Css.backgroundColor (Css.hex background)
+           , Css.zIndex (Css.int 1000)
+           , Css.displayFlex
+           , Css.flexDirection Css.column
+           , Css.justifyContent Css.center
+           , Css.alignItems Css.center
+           , Transitions.transition
+               [ Transitions.backgroundColor (splashTimer - 1000)
+               ]
+           ]
+       ]
+       [ Html.h1
+           [ css
+               [ Transitions.transition
+                   [ Transitions.opacity (splashTimer - 1000) ]
+               , Css.opacity (Css.num opacity)
+               , Css.color (Css.hex "fff")
+               , Css.marginBottom (Css.px 10)
+               ]
+           ]
+           [ Html.text "Multitimer" ]
+       , Html.div
+           []
+           [ Html.span
+               [ css
+                   [ Css.color (Css.hex Timer.salmon.lighter)
+                   , Css.padding2 (Css.px 0) (Css.px 5)
+                   , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
+                   , Css.opacity (Css.num opacity)
+                   ]
+               ]
+               [ Icon.alarmClock_ "none" 64 64 ]
+           , Html.span
+               [ css
+                   [ Css.color (Css.hex Timer.gold.lighter)
+                   , Css.padding2 (Css.px 0) (Css.px 5)
+                   , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
+                   , Css.opacity (Css.num opacity)
+                   ]
+               ]
+               [ Icon.alarmClock_ "none" 64 64 ]
+           , Html.span
+               [ css
+                   [ Css.color (Css.hex Timer.purple.lighter)
+                   , Css.padding2 (Css.px 0) (Css.px 5)
+                   , Transitions.transition [ Transitions.opacity (splashTimer - 1500) ]
+                   , Css.opacity (Css.num opacity)
+                   ]
+               ]
+               [ Icon.alarmClock_ "none" 64 64 ]
+           ]
+       ]
+-}
 
 
 bottomMenuSpacer : Html Msg -> Html Msg
@@ -1215,22 +1332,26 @@ topMenu model =
                 _ ->
                     []
     in
-    Html.div
-        [ css
-            [ Css.displayFlex
-            , Css.justifyContent Css.spaceBetween
-            , Css.alignItems Css.center
-            , Css.padding2 Css.zero (Css.px 10)
-            , Css.height (Css.px 56)
-            , Css.position Css.fixed
-            , Css.width (Css.pct 100)
-            , Css.top Css.zero
-            , Css.zIndex (Css.int 99)
-            , Css.backgroundColor (Css.hex "#fff")
-            , Css.borderBottom3 (Css.px 1) Css.solid (Css.hex "#CDCDCD")
+    if List.isEmpty options then
+        Html.text ""
+
+    else
+        Html.div
+            [ css
+                [ Css.displayFlex
+                , Css.justifyContent Css.spaceBetween
+                , Css.alignItems Css.center
+                , Css.padding2 Css.zero (Css.px 10)
+                , Css.height (Css.px 56)
+                , Css.position Css.fixed
+                , Css.width (Css.pct 100)
+                , Css.top Css.zero
+                , Css.zIndex (Css.int 99)
+                , Css.backgroundColor (Css.hex "#fff")
+                , Css.borderBottom3 (Css.px 1) Css.solid (Css.hex "#CDCDCD")
+                ]
             ]
-        ]
-        options
+            options
 
 
 editingModeTopMenu : (Mode -> Screen) -> List (Html Msg)
@@ -1303,14 +1424,14 @@ bottomMenu model =
             bottomMenu_
                 [ bottomPlayPause model
                 , menuIcon_ (ScreenSelected True model.screen <| Countdown Normal) Icon.view
-                , menuIcon_ (ScreenSelected True model.screen <| TimerAdd Simple) Icon.plus
+                , menuIcon_ (ScreenSelected True model.screen <| TimerAdd Timer.Simple) Icon.plus
                 ]
 
         Countdown _ ->
             bottomMenu_
                 [ bottomPlayPause model
                 , menuIcon_ (ScreenSelected True model.screen <| Thumbnail Normal) Icon.grid
-                , menuIcon_ (ScreenSelected True model.screen <| TimerAdd Simple) Icon.plus
+                , menuIcon_ (ScreenSelected True model.screen <| TimerAdd Timer.Simple) Icon.plus
                 ]
 
         _ ->
@@ -1345,7 +1466,7 @@ bottomMenu_ menu =
 
 bottomPlayPause : Model -> Html Msg
 bottomPlayPause model =
-    if List.any (.state >> (==) Counting) model.timers then
+    if List.any (.state >> (==) Timer.Counting) model.timers then
         Icon.pause_ "#5D5D5D" 24 24
             |> menuIcon_ PauseAll
 
@@ -1402,10 +1523,10 @@ thumbnail mode timer =
     let
         type_ =
             if timer.repetitions > 1 || timer.restTime > 0 then
-                Interval
+                Timer.Interval
 
             else
-                Simple
+                Timer.Simple
 
         ( onClick, background ) =
             case mode of
@@ -1420,9 +1541,26 @@ thumbnail mode timer =
                         |> Events.onClick
                     , Css.hex timer.color.lighter
                     )
+
+        displayTime =
+            case timer.state of
+                Timer.Counting ->
+                    millisToDigital timer.currentTime
+
+                Timer.Paused ->
+                    millisToDigital timer.currentTime
+
+                Timer.RestPaused ->
+                    millisToDigital timer.currentRestTime
+
+                Timer.RestCounting ->
+                    millisToDigital timer.currentRestTime
+
+                _ ->
+                    ""
     in
     case timer.state of
-        Deleted ->
+        Timer.Deleted ->
             Html.text ""
 
         _ ->
@@ -1448,27 +1586,27 @@ thumbnail mode timer =
 
                     Normal ->
                         case timer.state of
-                            Counting ->
-                                ToggleState timer.id Paused
+                            Timer.Counting ->
+                                ToggleState timer.id Timer.Paused
                                     |> thumbIcon Icon.pause
 
-                            Paused ->
-                                ToggleState timer.id Counting
+                            Timer.Paused ->
+                                ToggleState timer.id Timer.Counting
                                     |> thumbIcon Icon.play
 
-                            Ringing ->
+                            Timer.Ringing ->
                                 AlarmStopped timer.id
                                     |> thumbIcon (Icon.alarmClock_ "none" 24 24)
 
-                            RestCounting ->
-                                ToggleState timer.id RestPaused
+                            Timer.RestCounting ->
+                                ToggleState timer.id Timer.RestPaused
                                     |> thumbIcon (Icon.moon_ "none" 24 24)
 
-                            RestPaused ->
-                                ToggleState timer.id RestCounting
-                                    |> thumbIcon Icon.pause
+                            Timer.RestPaused ->
+                                ToggleState timer.id Timer.RestCounting
+                                    |> thumbIcon Icon.play
 
-                            Reset ->
+                            Timer.Reset ->
                                 AlarmReset timer.id
                                     |> thumbIcon (Icon.reset_ "none" 24 24)
 
@@ -1486,7 +1624,7 @@ thumbnail mode timer =
                         , Css.fontWeight (Css.int 200)
                         ]
                     ]
-                    [ Html.text <| millisToDigital timer.currentTime ]
+                    [ Html.text displayTime ]
                 ]
 
 
@@ -1587,14 +1725,17 @@ countdownListItem mode timer =
     let
         type_ =
             if timer.repetitions > 1 || timer.restTime > 0 then
-                Interval
+                Timer.Interval
 
             else
-                Simple
+                Timer.Simple
 
         time =
             case timer.state of
-                RestCounting ->
+                Timer.RestCounting ->
+                    millisToDigital timer.currentRestTime
+
+                Timer.RestPaused ->
                     millisToDigital timer.currentRestTime
 
                 _ ->
@@ -1617,22 +1758,22 @@ countdownListItem mode timer =
                         / timer.startTime
                         * 100
                     , case timer.state of
-                        Counting ->
-                            countdownListItemIcon Icon.pause_ (ToggleState timer.id Paused)
+                        Timer.Counting ->
+                            countdownListItemIcon Icon.pause_ (ToggleState timer.id Timer.Paused)
 
-                        Paused ->
-                            countdownListItemIcon Icon.play_ (ToggleState timer.id Counting)
+                        Timer.Paused ->
+                            countdownListItemIcon Icon.play_ (ToggleState timer.id Timer.Counting)
 
-                        Ringing ->
+                        Timer.Ringing ->
                             countdownListItemIcon (always Icon.alarm) (AlarmStopped timer.id)
 
-                        RestCounting ->
-                            countdownListItemIcon (\_ w h -> Icon.moon_ "none" w h) (ToggleState timer.id RestPaused)
+                        Timer.RestCounting ->
+                            countdownListItemIcon (\_ w h -> Icon.moon_ "none" w h) (ToggleState timer.id Timer.RestPaused)
 
-                        RestPaused ->
-                            countdownListItemIcon Icon.pause_ (ToggleState timer.id RestCounting)
+                        Timer.RestPaused ->
+                            countdownListItemIcon Icon.play_ (ToggleState timer.id Timer.RestCounting)
 
-                        Reset ->
+                        Timer.Reset ->
                             countdownListItemIcon Icon.reset_ (AlarmReset timer.id)
 
                         _ ->
@@ -1756,7 +1897,7 @@ countdownListItemIcon icon event =
         [ icon "#fff" 48 48 ]
 
 
-timerEdit : Int -> TimerType -> Model -> Html Msg
+timerEdit : Int -> Timer.TimerType -> Model -> Html Msg
 timerEdit id type_ model =
     let
         timerTypeSelected =
@@ -1766,7 +1907,7 @@ timerEdit id type_ model =
     timerEditScreen True id timerTypeSelected type_ model
 
 
-timerAdd : TimerType -> Model -> Html Msg
+timerAdd : Timer.TimerType -> Model -> Html Msg
 timerAdd type_ model =
     let
         timerTypeSelected =
@@ -1776,8 +1917,8 @@ timerAdd type_ model =
     timerEditScreen False -1 timerTypeSelected type_ model
 
 
-timerEditScreen : Bool -> Int -> (TimerType -> Msg) -> TimerType -> Model -> Html Msg
-timerEditScreen showDelete inx onTimerTypeSelected timerType m =
+timerEditScreen : Bool -> Int -> (Timer.TimerType -> Msg) -> Timer.TimerType -> Model -> Html Msg
+timerEditScreen showDelete inx onTimer timerType m =
     Html.div
         [ css
             [ Css.backgroundColor (Css.hex "#EFEFEF")
@@ -1788,7 +1929,7 @@ timerEditScreen showDelete inx onTimerTypeSelected timerType m =
         ]
         [ input InputName m.tempTimer.label
         , colorPicker ColorSelected m.tempTimer.color
-        , segmentedControl onTimerTypeSelected timerType
+        , segmentedControl onTimer timerType
         , wheelSelector 26 MomentumStart DragStep MomentumStop m.startTimeWheels
         , multitimerSettings
             { onCheck = InputVibrate
@@ -1811,7 +1952,7 @@ timerEditScreen showDelete inx onTimerTypeSelected timerType m =
             m.repetitionModalOpen
         , modal (ToneModalOpened False)
             "Alarm Tone"
-            (picker (always TonePositionUpdated) [ ( m.tonePickerPosition, List.map toneToString alarmTones ) ])
+            (picker (always TonePositionUpdated) [ ( m.tonePickerPosition, List.map Timer.toneToString Timer.alarmTones ) ])
             m.toneModalOpen
         , modal
             (RestTimeModalOpened False)
@@ -1853,9 +1994,9 @@ type alias MultitimerSettings msg =
     , checked : Bool
     , repetitions : Int
     , restTime : Float
-    , onToneSelected : AlarmTone -> msg
-    , tone : AlarmTone
-    , timerType : TimerType
+    , onToneSelected : Timer.AlarmTone -> msg
+    , tone : Timer.AlarmTone
+    , timerType : Timer.TimerType
     }
 
 
@@ -1868,10 +2009,10 @@ multitimerSettings m =
     let
         extraSettings =
             case m.timerType of
-                Simple ->
+                Timer.Simple ->
                     []
 
-                Interval ->
+                Timer.Interval ->
                     [ listItem (RepetitionModalOpened True) (String.fromInt m.repetitions) "Repetitions"
                     , listItem (RestTimeModalOpened True) (millisToDigital m.restTime) "Rest Time"
                     ]
@@ -1882,7 +2023,7 @@ multitimerSettings m =
             [ class "list" ]
           <|
             extraSettings
-                ++ [ listItem (ToneModalOpened True) "Tone" (toneToString m.tone)
+                ++ [ listItem (ToneModalOpened True) "Tone" (Timer.toneToString m.tone)
                    , Html.li [ class "list-item" ]
                         [ Html.div [ class "list-item__center" ] [ Html.text "Vibrate" ]
                         , Html.div
@@ -2246,9 +2387,9 @@ input onInput name =
         ]
 
 
-colorPicker : (Color -> msg) -> Color -> Html msg
+colorPicker : (Timer.Color -> msg) -> Timer.Color -> Html msg
 colorPicker colorSelected currentColor =
-    List.map (color colorSelected currentColor) colors
+    List.map (color colorSelected currentColor) Timer.colors
         |> Html.div
             [ css
                 [ Css.paddingTop (Css.px 26)
@@ -2259,7 +2400,7 @@ colorPicker colorSelected currentColor =
             ]
 
 
-color : (Color -> msg) -> Color -> Color -> Html msg
+color : (Timer.Color -> msg) -> Timer.Color -> Timer.Color -> Html msg
 color colorSelected currentColor color_ =
     Html.div
         [ css [ Css.position Css.relative ]
@@ -2298,15 +2439,15 @@ color colorSelected currentColor color_ =
         ]
 
 
-segmentedControl : (TimerType -> msg) -> TimerType -> Html msg
+segmentedControl : (Timer.TimerType -> msg) -> Timer.TimerType -> Html msg
 segmentedControl onClick type_ =
     let
         translation =
             case type_ of
-                Simple ->
+                Timer.Simple ->
                     0
 
-                Interval ->
+                Timer.Interval ->
                     100
     in
     Html.div
@@ -2317,7 +2458,7 @@ segmentedControl onClick type_ =
             , Css.width (Css.pct 60)
             ]
         ]
-        [ List.map (\opt -> segmentedOption (onClick opt) (timerTypeToString opt)) [ Simple, Interval ]
+        [ List.map (\opt -> segmentedOption (onClick opt) (Timer.timerTypeToString opt)) [ Timer.Simple, Timer.Interval ]
             |> (++)
                 [ Html.span
                     [ css
@@ -2828,11 +2969,6 @@ setWheels t =
     ]
 
 
-flip : (a -> b -> c) -> b -> a -> c
-flip f b a =
-    f a b
-
-
 setPicker : Float -> List PickerState
 setPicker t =
     if t == 0 then
@@ -2865,3 +3001,67 @@ setPicker t =
         , { initPickerState | currentPosition = -minutes, index = tminutes }
         , { initPickerState | currentPosition = -seconds, index = tseconds }
         ]
+
+
+fromActive : Float -> Timer -> Timer
+fromActive elapsedTime timer =
+    if elapsedTime == 0 then
+        timer
+
+    else
+        case timer.state of
+            Timer.Counting ->
+                let
+                    time =
+                        max 0 (timer.currentTime - elapsedTime)
+                in
+                if time == 0 then
+                    if timer.currentRepetition < timer.repetitions then
+                        if timer.restTime > 0 then
+                            fromActive
+                                (max 0 <| elapsedTime - timer.currentTime)
+                                { timer
+                                    | currentTime = timer.startTime
+                                    , currentRestTime = timer.restTime
+                                    , state = Timer.RestCounting
+                                }
+
+                        else
+                            fromActive
+                                (max 0 <| elapsedTime - timer.currentTime)
+                                { timer
+                                    | currentTime = timer.startTime
+                                    , currentRepetition = timer.currentRepetition + 1
+                                }
+
+                    else
+                        { timer | currentTime = time, state = Timer.Reset }
+
+                else
+                    { timer | currentTime = time }
+
+            Timer.RestCounting ->
+                let
+                    time =
+                        max 0 (timer.currentRestTime - elapsedTime)
+                in
+                if time == 0 then
+                    fromActive
+                        (max 0 <| elapsedTime - timer.currentRestTime)
+                        { timer
+                            | currentRestTime = timer.restTime
+                            , currentRepetition = timer.currentRepetition + 1
+                            , currentTime = timer.startTime
+                            , state = Timer.Counting
+                        }
+
+                else
+                    { timer | currentRestTime = time }
+
+            _ ->
+                timer
+
+
+flip : (a -> b -> c) -> b -> a -> c
+flip f b a =
+    f a b
