@@ -1,9 +1,13 @@
 package com.example.app;
 
+import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Message;
+import android.os.Messenger;
+import android.os.RemoteException;
 
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -13,54 +17,25 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "BackgroundRunner")
 public class BackgroundRunnerPlugin extends Plugin {
     public BackgroundRunnerPlugin() {
-        super();
+       super();
     }
 
     @PluginMethod()
-    public void startBackground(PluginCall call) throws Exception {
-        System.out.println(call.getData().toString());
-    }
-
-    @PluginMethod()
-    public void createAlarm(PluginCall call) throws Exception {
-        AlarmManager alarmManager = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
-        Timer t = Timer.fromJsonObject(call.getData());
-        System.out.println(call.getData());
-        if(t.getState() == Timer.TimerState.Counting) {
-            if(t.getCurrentTime() <= 1000L) {
-                if(t.alarmReceived()) {
-                    call.resolve();
-                    return;
-                }
-            }
-        } else {
-            if(t.getCurrentRestTime() <= 1000L) {
-                t.alarmReceived();
-            }
-        }
-        Intent intent = new Intent(getContext(), TimerReceiver.class);
-        t.writeToIntent(intent);
-
-        PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                getContext(),
-                t.getId(),
-                intent,
-                PendingIntent.FLAG_ONE_SHOT);
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,
-                t.getNextAlarmTime(),
-                pendingIntent);
+    public void createTimer(PluginCall call) throws Exception {
+        Message msg = Message.obtain(null, TimerService.START_TIMER, 0, 0, Timer.fromJsonObject((call.getData())));
+        getMessenger().send(msg);
         call.resolve();
     }
 
     @PluginMethod()
-    public void stopAlarm(PluginCall call) throws Exception {
-        AlarmManager alarmManager = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
-        Intent intent = new Intent(getContext(), TimerReceiver.class);
-        //intent.putExtra("state", "Paused");
-        int id = call.getInt("id");
-        PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                getContext(), id, intent, PendingIntent.FLAG_ONE_SHOT);
-        alarmManager.cancel(pendingIntent);
+    public void stopTimer(PluginCall call) throws Exception {
+        Message msg = Message.obtain(null, TimerService.START_TIMER, call.getInt("id",0));
+        getMessenger().send(msg);
         call.resolve();
+    }
+
+    private Messenger getMessenger() {
+        MainActivity ma = (MainActivity)getActivity();
+        return ma.getMessenger();
     }
 }

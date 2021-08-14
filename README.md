@@ -5,7 +5,7 @@ Written using [Elm](https://elm-lang.org/) and [Capacitor JS](https://capacitorj
 
 ## Overview
 
-Never meant to publish this thing, but a couple of friends pushed me to. A special thanks to [Alyssa Aguilar](https://www.instagram.com/ms_mambo/?hl=en) for being kind
+Never meant to publish this thing, but a couple of friends pushed me to. A special thanks to [Alyssa Aguilar](http://www.alyssaaguilardesign.com/) for being kind
 enough to do the UX!
 
 The goal was to create a multiplatform app, but make it look like an IOS app. Seems to be ok enough for android.

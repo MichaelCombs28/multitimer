@@ -79,7 +79,7 @@ const vibrate = {};
       }
       case "timers": {
         console.log("Sending timers to background task");
-        await BackgroundRunner.startBackground({ timers: event.timers });
+        //await BackgroundRunner.startBackground({ timers: event.timers });
         return;
       }
       case "nowActive": {
@@ -105,13 +105,13 @@ const vibrate = {};
       }
       case "alarmStarted": {
         delete event.type;
-        await BackgroundRunner.createAlarm({
+        await BackgroundRunner.createTimer({
           ...event,
         });
         return;
       }
       case "alarmStopped": {
-        await BackgroundRunner.stopAlarm({ id: event.id });
+        await BackgroundRunner.stopTimer({ id: event.id });
         return;
       }
     }

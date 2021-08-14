@@ -1,5 +1,6 @@
 package com.example.app;
 
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -67,7 +68,16 @@ public class NotificationUtils {
         );
     }
 
+    private static boolean isBackground() {
+        ActivityManager.RunningAppProcessInfo proc = new ActivityManager.RunningAppProcessInfo();
+        ActivityManager.getMyMemoryState(proc);
+        return proc.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+    }
+
     private static void createNotification(Context ctx, int id, String title, String content, long[] vibratePattern, String tone) {
+        if(!isBackground()){
+            return;
+        }
         NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(content)

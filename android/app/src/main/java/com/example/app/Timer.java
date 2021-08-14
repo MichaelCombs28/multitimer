@@ -1,5 +1,6 @@
 package com.example.app;
 
+import android.content.Context;
 import android.content.Intent;
 
 import com.getcapacitor.JSObject;
@@ -162,5 +163,45 @@ public class Timer {
 
     public Long getRingingTime() {
         return ringingTime;
+    }
+
+    public boolean isDone() {
+        return state != TimerState.Counting && state != TimerState.RestCounting;
+    }
+
+    public void tick(Context ctx) {
+        switch(state) {
+            case Counting:
+                currentTime -= 1000;
+                if(currentTime <= 0) {
+                    currentTime = startTime;
+                    if(currentRepetition < repetitions) {
+                        // Is an interval timer with rest
+                        if(restTime > 0) {
+                            currentRestTime = restTime;
+                            state = TimerState.RestCounting;
+                            NotificationUtils.createRest(ctx, this);
+                        } else {
+                            //Timer stays in a counting state
+                            currentRepetition++;
+                        }
+                    } else {
+                        state = TimerState.Ringing;
+                        NotificationUtils.createRing(ctx, this);
+                    }
+                }
+                break;
+            case RestCounting:
+                currentRestTime -= 1000;
+                if(currentRestTime <= 0) {
+                    //Timer never ends on a rest
+                    currentRestTime = restTime;
+                    currentTime = startTime;
+                    currentRepetition++;
+                    state = TimerState.Counting;
+                    NotificationUtils.createRest(ctx, this);
+                }
+                break;
+        }
     }
 }
