@@ -912,6 +912,11 @@
   dependencies:
     tslib "^2.1.0"
 
+"@capacitor/device@^1.0.2":
+  version "1.0.2"
+  resolved "https://registry.yarnpkg.com/@capacitor/device/-/device-1.0.2.tgz#bcaa8e6fbd06f96ec51670bf157bd107151b3fed"
+  integrity sha512-742Mq/zAjqUcOd9khhP0m/HXsZmWlymJdt09G/gEQkK3s8737Oey4xZwCnjtdjwt3ztEqcP4X8+yR01O80TDsA==
+
 "@capacitor/haptics@^1.0.2":
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/@capacitor/haptics/-/haptics-1.0.2.tgz#fea5055e5eac254fbb27d4f650d041f068a5277b"

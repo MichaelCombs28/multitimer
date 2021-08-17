@@ -22,7 +22,7 @@ import Time
 import Timer exposing (Timer)
 
 
-main : Program (Maybe { lastScreen : String }) App Msg
+main : Program Flags App Msg
 main =
     Browser.element
         { init = init >> Tuple.mapFirst Active
@@ -85,8 +85,32 @@ appView app =
 -- MODEL
 
 
+type Platform
+    = Web
+    | IOS
+    | Android
+
+
+platformFromString : String -> Maybe Platform
+platformFromString platform =
+    case platform of
+        "web" ->
+            Just Web
+
+        "ios" ->
+            Just IOS
+
+        "android" ->
+            Just Android
+
+        _ ->
+            Nothing
+
+
 type alias Model =
     { screen : Screen
+    , platform : Platform
+    , isVirtual : Bool
     , loaded : Bool
     , lastScreen : Screen
     , timers : List Timer
@@ -102,12 +126,19 @@ type alias Model =
     }
 
 
-init : Maybe { lastScreen : String } -> ( Model, Cmd Msg )
-init ls =
+type alias Flags =
+    { lastScreen : Maybe String
+    , platform : String
+    , isVirtual : Bool
+    }
+
+
+init : Flags -> ( Model, Cmd Msg )
+init flags =
     let
         ( screen, cmds_ ) =
-            case ls of
-                Just { lastScreen } ->
+            case flags.lastScreen of
+                Just lastScreen ->
                     case screenFromString lastScreen of
                         Just s ->
                             ( s, Cmd.none )
@@ -123,6 +154,8 @@ init ls =
                 [ Ports.fromElm Ports.keepAwake, cmds_ ]
     in
     ( { screen = screen
+      , platform = platformFromString flags.platform |> Maybe.withDefault Web
+      , isVirtual = flags.isVirtual
       , loaded = False
       , lastScreen = Thumbnail Normal
       , timers = []
@@ -1088,7 +1121,17 @@ view model =
             [ Attributes.href "https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400&display=swap", Attributes.rel "stylesheet" ]
             []
         , topMenu model
-        , Html.div [ css [ Css.paddingTop (Css.px 56) ] ] []
+        , Html.div
+            [ css
+                [ case model.platform of
+                    IOS ->
+                        Css.property "padding-top" "calc(56px + 2rem)"
+
+                    _ ->
+                        Css.paddingTop (Css.px 56)
+                ]
+            ]
+            []
         , case model.screen of
             Thumbnail mode ->
                 if List.isEmpty model.timers then
@@ -1349,6 +1392,12 @@ topMenu model =
                 , Css.zIndex (Css.int 99)
                 , Css.backgroundColor (Css.hex "#fff")
                 , Css.borderBottom3 (Css.px 1) Css.solid (Css.hex "#CDCDCD")
+                , case model.platform of
+                    IOS ->
+                        Css.marginTop (Css.rem 3)
+
+                    _ ->
+                        Css.batch []
                 ]
             ]
             options
