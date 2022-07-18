@@ -1,5 +1,5 @@
 const config = {
-  appId: "com.example.app",
+  appId: "com.multitimer.app",
   appName: "multitmer",
   webDir: "build",
   bundledWebRuntime: false,

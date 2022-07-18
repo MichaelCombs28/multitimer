@@ -1,4 +1,4 @@
-package com.example.app;
+package com.multitimer.app;
 
 import android.content.Context;
 import android.content.Intent;

@@ -1,1 +1,6 @@
-{}
+{
+	"appId": "com.example.app",
+	"appName": "multitmer",
+	"webDir": "build",
+	"bundledWebRuntime": false
+}

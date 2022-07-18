@@ -34,9 +34,11 @@ const vibrate = {};
 (async () => {
   const device = await Device.getInfo();
   const { value: flags } = await Storage.get({ key: "flags" });
+  const cflags = flags ? { ...device, ...JSON.parse(flags) } : { ...device, lastScreen: null };
+  console.log(cflags);
   const app = Elm.Main.init({
     node: document.getElementsByTagName("body")[0],
-    flags: flags ? { ...device, ...JSON.parse(flags) } : null,
+    flags: cflags,
   });
   const eventHandler = async ({ type, ...event }) => {
     switch (type) {

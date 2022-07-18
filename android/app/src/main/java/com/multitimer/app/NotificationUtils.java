@@ -1,4 +1,4 @@
-package com.example.app;
+package com.multitimer.app;
 
 import android.app.ActivityManager;
 import android.app.Notification;
